@@ -253,7 +253,7 @@ function resolvePath(base, rel){
   return baseParts.join('/');
 }
 
-async function parseEpub(file){
+async function parseEpub(file, fallbackName){
   const zip = await JSZip.loadAsync(file);
   const containerXml = await zip.file('META-INF/container.xml').async('text');
   const containerDoc = new DOMParser().parseFromString(containerXml, 'application/xml');
@@ -261,7 +261,8 @@ async function parseEpub(file){
   const opfText = await zip.file(opfPath).async('text');
   const opfDoc = new DOMParser().parseFromString(opfText, 'application/xml');
 
-  const title = opfDoc.querySelector('metadata title')?.textContent?.trim() || file.name.replace(/\.epub$/i,'');
+  const nameForFallback = (file && file.name) ? file.name : (fallbackName || 'Untitled');
+  const title = opfDoc.querySelector('metadata title')?.textContent?.trim() || nameForFallback.replace(/\.epub$/i,'');
   const author = opfDoc.querySelector('metadata creator')?.textContent?.trim() || 'Unknown author';
 
   const manifestItems = {};
@@ -309,6 +310,41 @@ async function loadFiles(fileList){
       library.push(book);
     }catch(err){
       console.error('Failed to parse', file.name, err);
+    }
+  }
+  hideLoading();
+  renderLibrary();
+}
+
+async function loadFromBooksList(){
+  let listText;
+  try{
+    const res = await fetch('Files/Books.txt');
+    if(!res.ok) return; // no manifest present, skip silently
+    listText = await res.text();
+  }catch(err){
+    return; // e.g. running from file:// or manifest missing
+  }
+
+  const entries = listText
+    .split(/\r?\n/)
+    .map(l=>l.trim())
+    .filter(l=>l && !l.startsWith('#'));
+
+  if(entries.length === 0) return;
+
+  showLoading('Loading your library…');
+  for(const entry of entries){
+    const path = entry.startsWith('Files/') ? entry : `Files/${entry}`;
+    try{
+      const res = await fetch(path);
+      if(!res.ok){ console.error('Could not fetch', path, res.status); continue; }
+      const blob = await res.blob();
+      const fallbackName = path.split('/').pop();
+      const book = await parseEpub(blob, fallbackName);
+      library.push(book);
+    }catch(err){
+      console.error('Failed to load', entry, err);
     }
   }
   hideLoading();
@@ -450,6 +486,7 @@ document.addEventListener('keydown', e=>{
 });
 
 renderLibrary();
+loadFromBooksList();
 </script>
 </body>
 </html>
